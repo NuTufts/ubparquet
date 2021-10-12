@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os,sys,argparse
+from math import sqrt
 from ctypes import c_int
 
 parser = argparse.ArgumentParser("Test PrepKeypointData")
@@ -75,6 +76,14 @@ origin_x = voxelizer.get_origin()[0]
 origin_y = voxelizer.get_origin()[1]
 origin_z = voxelizer.get_origin()[2]
 
+# mc truth
+save_mctruth = True
+larbysmc = ublarcvapp.mctools.LArbysMC()
+
+# track conversion
+track_convertor = ublarcvapp.mctools.TruthTrackSCE()
+shower_convertor = ublarcvapp.mctools.TruthShowerTrunkSCE()
+
 print("Entries in file: ",nentries)
 
 columns = ['spacepoint_t', 'imgcoord_t', 'instance_t', 'segment_t', 'truetriplet_t',"kplabel_t",'origin_t',
@@ -86,7 +95,7 @@ for col in columns:
     entry_dict[col+"_shape"] = []
 
 # Extra columns
-if False:
+if save_mctruth:
     # Indexing    
     entry_dict["run"] = []
     entry_dict['subrun'] = []
@@ -96,8 +105,12 @@ if False:
     entry_dict['truepos'] = []
     entry_dict['nu_energy'] = []
     entry_dict['nu_pid'] = []
+    entry_dict['nu_ccnc'] = []    
+    entry_dict['nu_interaction'] = []
+    entry_dict['nu_geniemode'] = []    
     entry_dict['primary_mom'] = []
     entry_dict['primary_pid'] = []
+    entry_dict['primary_start'] = []    
 
 for ientry in range(nentries):
 
@@ -108,6 +121,69 @@ for ientry in range(nentries):
     
     ioll.go_to(ientry)
     iolcv.read_entry(ientry)
+
+    # extract truth info
+    if save_mctruth:
+        larbysmc.process( ioll )
+        
+        entry_dict['run'].append( larbysmc._run )
+        entry_dict['subrun'].append( larbysmc._subrun )
+        entry_dict['event'].append( larbysmc._event )
+
+        entry_dict['truepos'].append( [larbysmc._vtx_sce_x,larbysmc._vtx_sce_y,larbysmc._vtx_sce_z] )
+        entry_dict['nu_energy'].append( larbysmc._Enu_true )
+        entry_dict['nu_pid'].append( larbysmc._nu_pdg )
+        entry_dict['nu_ccnc'].append( larbysmc._current_type )
+        entry_dict['nu_interaction'].append( larbysmc._interaction_type )
+        entry_dict['nu_geniemode'].append( larbysmc._genie_mode )
+
+        ev_mctrack  = ioll.get_data(larlite.data.kMCTrack,"mcreco")
+        ev_mcshower = ioll.get_data(larlite.data.kMCShower,"mcreco")
+
+        # store mctrack, store mcshower
+        prim_mom = []
+        prim_start = []
+        prim_pid = []
+
+        for itrack in range(ev_mctrack.size()):
+            track = ev_mctrack.at(itrack)
+            if track.Origin()!=1:
+                continue
+            sce_track = track_convertor.applySCE( track )
+            # we record the initial direction and start point
+            trackE = track.Start().E()
+            trackP = sqrt( track.Start().Px()*track.Start().Px() + track.Start().Py()*track.Start().Py() + track.Start().Pz()*track.Start().Pz() )
+            if sce_track.NumberTrajectoryPoints()<2:
+                continue
+            start = sce_track.LocationAtPoint(0)
+            sdir  = sce_track.DirectionAtPoint(0)
+            mom = [ trackP*sdir[i] for i in range(3) ]
+            prim_mom.append( [trackE] + mom )
+            prim_pid.append( track.PdgCode() )
+            prim_start.append( [ start[i] for i in range(3) ] )
+
+        for ishower in range(ev_mcshower.size()):
+            shower = ev_mcshower.at(ishower)
+            if shower.Origin()!=1:
+                continue
+            sce_track = shower_convertor.applySCE( shower )
+            if sce_track.NumberTrajectoryPoints()<2:
+                continue
+                        
+            # we record the initial direction and start point
+            trackE = track.Start().E()
+            trackP = sqrt( track.Start().Px()*track.Start().Px() + track.Start().Py()*track.Start().Py() + track.Start().Pz()*track.Start().Pz() )
+            start = sce_track.LocationAtPoint(0)
+            sdir  = sce_track.DirectionAtPoint(0)
+            mom = [ trackP*sdir[i] for i in range(3) ]
+            prim_mom.append( [trackE] + mom )
+            prim_pid.append( track.PdgCode() )
+            prim_start.append( [ start[i] for i in range(3) ] )
+            
+        entry_dict['primary_mom'].append( prim_mom )
+        entry_dict['primary_start'].append( prim_start )
+        entry_dict['primary_pid'].append( prim_pid )
+
     
     tripmaker = ev_triplet[0]
     
