@@ -110,9 +110,14 @@ if save_mctruth:
     entry_dict['nu_geniemode'] = []    
     entry_dict['primary_mom'] = []
     entry_dict['primary_pid'] = []
-    entry_dict['primary_start'] = []    
+    entry_dict['primary_start'] = []
+    entry_dict['primary_trackid'] = []
 
-for ientry in range(nentries):
+    # voxel instance map
+    entry_dict['voxinstancelist'] = []
+    entry_dict['voxidlist'] = []    
+
+for ientry in range(2,nentries):
 
     # load the entry data in the ROOT files
     print()
@@ -144,6 +149,7 @@ for ientry in range(nentries):
         prim_mom = []
         prim_start = []
         prim_pid = []
+        prim_trackid = []
 
         for itrack in range(ev_mctrack.size()):
             track = ev_mctrack.at(itrack)
@@ -161,6 +167,7 @@ for ientry in range(nentries):
             prim_mom.append( [trackE] + mom )
             prim_pid.append( track.PdgCode() )
             prim_start.append( [ start[i] for i in range(3) ] )
+            prim_trackid.append( track.TrackID() )
 
         for ishower in range(ev_mcshower.size()):
             shower = ev_mcshower.at(ishower)
@@ -171,18 +178,20 @@ for ientry in range(nentries):
                 continue
                         
             # we record the initial direction and start point
-            trackE = track.Start().E()
-            trackP = sqrt( track.Start().Px()*track.Start().Px() + track.Start().Py()*track.Start().Py() + track.Start().Pz()*track.Start().Pz() )
+            trackE = shower.Start().E()
+            trackP = sqrt( shower.Start().Px()*shower.Start().Px() + shower.Start().Py()*shower.Start().Py() + shower.Start().Pz()*shower.Start().Pz() )
             start = sce_track.LocationAtPoint(0)
             sdir  = sce_track.DirectionAtPoint(0)
             mom = [ trackP*sdir[i] for i in range(3) ]
             prim_mom.append( [trackE] + mom )
-            prim_pid.append( track.PdgCode() )
+            prim_pid.append( shower.PdgCode() )
             prim_start.append( [ start[i] for i in range(3) ] )
+            prim_trackid.append( shower.TrackID() )            
             
         entry_dict['primary_mom'].append( prim_mom )
         entry_dict['primary_start'].append( prim_start )
         entry_dict['primary_pid'].append( prim_pid )
+        entry_dict['primary_trackid'].append( prim_trackid )
 
     
     tripmaker = ev_triplet[0]
@@ -233,6 +242,16 @@ for ientry in range(nentries):
     # voxel instance
     voxinstancedict = voxelizer.make_instance_dict_labels( tripmaker );
     tripdata.update(voxinstancedict)
+    # convert instance2id into a numpy array
+    instancelist = []
+    idlist = []
+    for instance,iid in voxinstancedict['voxinstance2id'].items():
+        instancelist.append(int(instance))
+        idlist.append(int(iid))
+    print("instancelist: ",instancelist)
+    print("idlist      : ",idlist)
+    entry_dict['voxinstancelist'].append( instancelist )
+    entry_dict['voxidlist'].append( idlist )    
 
     # voxel origin
     voxorigindict = voxelizer.make_origin_dict_labels( tripmaker );
@@ -252,7 +271,7 @@ for ientry in range(nentries):
         print("col-s: ",s)
         entry_dict[col+"_shape"].append( s )
 
-    if True:
+    if True and ientry>=4:
         break
 
 print("Entry loop finished")
@@ -262,7 +281,7 @@ outfile.Close()
 
 print("write table")
 pa_table = pa.table( entry_dict )
-pyarrow.parquet.write_table(pa_table, "temp.parquet",compression="GZIP")
+pyarrow.parquet.write_table(pa_table, "temp2.parquet",compression="GZIP")
     
 
     
