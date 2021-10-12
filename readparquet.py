@@ -23,11 +23,14 @@ class UBParquetReader:
                 continue
             #print("unpack: ",k)
             shape_name = k+"_shape"
-            s = self.table[shape_name][ientry].as_py()
-            shape = np.array( s, dtype=np.int )
-            d = self.table[k][ientry].as_py()
-            arr = np.array( d ).reshape( shape )
-            entry_data[k] = arr
+            if shape_name in self.table.column_names:
+                s = self.table[shape_name][ientry].as_py()
+                shape = np.array( s, dtype=np.int )
+                d = self.table[k][ientry].as_py()
+                arr = np.array( d ).reshape( shape )
+                entry_data[k] = arr
+            else:
+                entry_data[k] = self.table[k][ientry]
         return entry_data
 
 
