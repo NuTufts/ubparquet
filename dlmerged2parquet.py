@@ -66,22 +66,8 @@ triptree.Branch("triplet_v",ev_triplet)
 kpana = larflow.keypoints.PrepKeypointData()
 kpana.setADCimageTreeName( args.adc )
 kpana.set_verbosity( larcv.msg.kDEBUG )
-#outfile.cd()
-#kpana.defineAnaTree() # creates a tree in outfile
-#kptree = outfile.Get("keypointlabels")
-#kptree.Print()
 
-# make particle ID pixel labels
-#ssnet = larflow.prep.PrepSSNetTriplet()
-#outfile.cd()
-#ssnet.defineAnaTree() # creates a tree in outfile
-#sstree = outfile.Get("ssnetlabels")
-#sstree.Print()
-
-# c++ extension that provides spacepoint labels
-#kploader = larflow.keypoints.LoaderKeypointData( triptree, kptree, sstree )
-#kploader.set_verbosity( larcv.msg.kDEBUG )
-#kploader.exclude_false_triplets( False )
+# voxel data generator (conversion from spacepoints)
 _voxelsize_cm = 1.0
 voxelizer = larflow.voxelizer.VoxelizeTriplets()
 voxelizer.set_voxel_size_cm( _voxelsize_cm )
@@ -91,12 +77,27 @@ origin_z = voxelizer.get_origin()[2]
 
 print("Entries in file: ",nentries)
 
-#columns = ['matchtriplet','ssnet_label','kplabel','spacepoint_t','voxcoord', 'voxfeat', 'voxlabel','voxssnet']
-columns = ['spacepoint_t', 'imgcoord_t', 'instance_t', 'segment_t', 'truetriplet_t',"kplabel_t"]
+columns = ['spacepoint_t', 'imgcoord_t', 'instance_t', 'segment_t', 'truetriplet_t',"kplabel_t",'origin_t',
+           'voxcoord', 'voxfeat', 'voxlabel','voxkplabel','voxssnet','voxinstance','voxorigin','voxoriginweight']
+
 entry_dict = {}
 for col in columns:
     entry_dict[col] = []
     entry_dict[col+"_shape"] = []
+
+# Extra columns
+if False:
+    # Indexing    
+    entry_dict["run"] = []
+    entry_dict['subrun'] = []
+    entry_dict['event'] = []
+
+    # MC truth columns
+    entry_dict['truepos'] = []
+    entry_dict['nu_energy'] = []
+    entry_dict['nu_pid'] = []
+    entry_dict['primary_mom'] = []
+    entry_dict['primary_pid'] = []
 
 for ientry in range(nentries):
 
@@ -104,6 +105,7 @@ for ientry in range(nentries):
     print()
     print("==========================")
     print("===[ EVENT ",ientry," ]===")
+    
     ioll.go_to(ientry)
     iolcv.read_entry(ientry)
     
@@ -129,14 +131,7 @@ for ientry in range(nentries):
     # make voxels
     voxelizer.make_voxeldata( tripmaker )
 
-    # load spacepoint data
-
-    # create voxelized data
-    #voxelbatch = next(iter(voxelloader))[0]
-    #print("voxelbatch: keys=",voxelbatch.keys())
-
-    # turn shuffle off
-    #kploader.triplet_v.at(0).setShuffleWhenSampling( False )
+    # Get NUMPY arrays
     
     # get 3d spacepoints
     tripdata = tripmaker.make_triplet_ndarray( False )
@@ -148,33 +143,29 @@ for ientry in range(nentries):
     print("tripdata: ",tripdata.keys())    
 
     # get voxel label dictionary
-    #voxdata = voxelizer.get_full_voxel_labelset_dict( tripmaker )
-    #pos = np.zeros( (voxdata["voxcoord"].shape[0], 6 ), dtype=np.float32 )
-    #pos[:,0:3] = voxdata["voxcoord"]
-    #pos[:,0] += origin_x/_voxelsize_cm
-    #pos[:,1] += origin_y/_voxelsize_cm 
-    #pos[:,2] += origin_z/_voxelsize_cm
-    #pos *= _voxelsize_cm            
-    #pos[:,3:] = np.clip( voxdata["voxfeat"]/40.0, 0, 10.0 )
+    voxdata = voxelizer.make_voxeldata_dict( tripmaker )
+    tripdata.update(voxdata)
 
-    #tripdata.update(voxdata)
-    #tripdata["spacepoint_t"] = pos
-    #print("tripdata: ",tripdata.keys())    
+    # voxel keypoints
+    voxkpdict = voxelizer.make_kplabel_dict_fromprep( kpana, voxdata["voxlabel"] )
+    tripdata.update(voxkpdict)
+
+    # voxel ssnet
+    voxssnetdict = voxelizer.make_ssnet_dict_labels( tripmaker )
+    tripdata.update(voxssnetdict)
+
+    # voxel instance
+    voxinstancedict = voxelizer.make_instance_dict_labels( tripmaker );
+    tripdata.update(voxinstancedict)
+
+    # voxel origin
+    voxorigindict = voxelizer.make_origin_dict_labels( tripmaker );
+    tripdata.update(voxorigindict)
     
-    #ntriplets = tripdata.shape[0]
-    #nfilled = c_int(0)    
-    #data = kploader.sample_data( ntriplets, nfilled, True )
+    # mc truth
 
-    #print("data: ",data.keys())
-    #print("triplet index: ",data["matchtriplet"][:10,:])
-    #for k,arr in data.items():
-    #    print(k,": shape=",arr.shape)
-
-    #data.update(spacepoints)
-    #for k in ['voxcoord', 'voxfeat', 'voxlabel']:
-    #    data[k] = voxelbatch[k]
-    #data["voxssnet"] = voxelbatch["ssnet_labels"]
-
+    print("tripdata+voxels: ",tripdata.keys())        
+    
     for col in columns:
         d = tripdata[col].flatten()
         print("col: ",d.shape)
