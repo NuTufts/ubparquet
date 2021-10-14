@@ -86,8 +86,10 @@ shower_convertor = ublarcvapp.mctools.TruthShowerTrunkSCE()
 
 print("Entries in file: ",nentries)
 
+# these are the numpy arrays that will be saved
 columns = ['spacepoint_t', 'imgcoord_t', 'instance_t', 'segment_t', 'truetriplet_t',"kplabel_t",'origin_t',
-           'voxcoord', 'voxfeat', 'voxlabel','voxkplabel','voxssnet','voxinstance','voxorigin','voxoriginweight']
+           'voxcoord', 'voxfeat', 'voxlabel','voxkplabel','voxssnet','voxinstance','voxorigin','voxoriginweight',
+           "wireimageplane0","wireimageplane1","wireimageplane2"]
 
 entry_dict = {}
 for col in columns:
@@ -117,7 +119,7 @@ if save_mctruth:
     entry_dict['voxinstancelist'] = []
     entry_dict['voxidlist'] = []    
 
-for ientry in range(2,nentries):
+for ientry in range(0,2):
 
     # load the entry data in the ROOT files
     print()
@@ -221,6 +223,11 @@ for ientry in range(2,nentries):
     # get 3d spacepoints
     tripdata = tripmaker.make_triplet_ndarray( False )
 
+    # 2d images (sparse format)
+    for p in range(3):
+        tripdata["wireimageplane%d"%(p)] = tripmaker.make_sparse_image( p )
+        print(tripdata["wireimageplane%d"%(p)][:10,:])
+        
     # keypoint labels
     kplabel = kpana.get_triplet_score_array( 10.0 ) # sigma in cm
     tripdata["kplabel_t"] = kplabel
