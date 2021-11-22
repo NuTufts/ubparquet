@@ -30,15 +30,26 @@ for col in columns:
     
 # 2d wire images
 for p in range(3):
-    entry_dict["wireimg%d"%(p)] = []
-    entry_dict["wireimg%d_shape"%(p)] = []
-    columns += ["wireimg%d"%(p)]
+    entry_dict["wireimg_feat%d"%(p)] = []
+    entry_dict["wireimg_feat%d_shape"%(p)] = []
+    entry_dict["wireimg_coord%d"%(p)] = []
+    entry_dict["wireimg_coord%d_shape"%(p)] = []
+    columns += ["wireimg_feat%d"%(p)]
+    columns += ["wireimg_coord%d"%(p)]    
 
+# add run,subrun,event to be able to collate back to original truth
+entry_dict["run"]    = []
+entry_dict["subrun"] = []
+entry_dict["event"]  = []
 
 for ientry in range(nentries):
 
     # Get the first entry (or row) in the tree (i.e. table)
     kploader.load_entry(ientry)
+
+    entry_dict["run"].append( kploader.run() )
+    entry_dict["subrun"].append( kploader.subrun() )
+    entry_dict["event"].append( kploader.event() )    
 
     # turn shuffle off (to do, function should be kploader function)
     tripdata = kploader.triplet_v.at(0).setShuffleWhenSampling( False )
@@ -46,7 +57,11 @@ for ientry in range(nentries):
     # 2d images
     wireimg_dict = {}
     for p in range(3):
-        wireimg_dict["wireimg%d"%(p)] = kploader.triplet_v.at(0).make_sparse_image( p ) 
+        wireimg = kploader.triplet_v.at(0).make_sparse_image( p )
+        wireimg_coord = wireimg[:,:2].astype(np.long)
+        wireimg_feat  = wireimg[:,2]
+        wireimg_dict["wireimg_coord%d"%(p)] = wireimg_coord
+        wireimg_dict["wireimg_feat%d"%(p)] = wireimg_feat        
 
     # get 3d spacepoints (to do, function should be kploader function)
     tripdata = kploader.triplet_v.at(0).get_all_triplet_data( True )
@@ -79,7 +94,10 @@ for ientry in range(nentries):
     max_v = np.max( data["matchtriplet"][:,1] )
     max_y = np.max( data["matchtriplet"][:,2] )
     print("sanity check, max indices: ",max_u,max_v,max_y)
-    
+
+print(entry_dict["run"])
+print(entry_dict["subrun"])
+print(entry_dict["event"])
 print("write table")
 pa_table = pa.table( entry_dict )
 pyarrow.parquet.write_table(pa_table, "temp.parquet",compression="GZIP")

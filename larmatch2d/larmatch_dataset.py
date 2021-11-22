@@ -8,31 +8,52 @@ from torch.utils.data import Dataset, DataLoader
 
 
 class larmatchDataset(torch.utils.data.Dataset):
-    def __init__(self, source=None, 
-                 random_access=True, verbose=False,
-                 voxelize=True, voxelsize_cm=1.0,
-                 is_voxeldata=False):
+    def __init__(self, source=None, verbose=False, load_all_columns=False ):
         """
         Parameters:
         """
 
+        self._cols = ['wireimg_coord0',
+                      'wireimg_coord0_shape',
+                      'wireimg_feat0',
+                      'wireimg_feat0_shape',
+                      'wireimg_coord1',
+                      'wireimg_coord1_shape',
+                      'wireimg_feat1',
+                      'wireimg_feat1_shape',
+                      'wireimg_coord2',
+                      'wireimg_coord2_shape',
+                      'wireimg_feat2',
+                      'wireimg_feat2_shape',
+                      'run','subrun','event']
 
         self.spark = SparkSession \
             .builder \
             .appName("larmatchDataset") \
-            .getOrCreate()
+            .getOrCreate()        
         
-        print("loading dataset...")
-        self.df = self.spark.read.option("mergeSchema", "true").parquet(source)                                
-        print("finished reading table")
+        print("larmatchDataset: loading dataset...")
+        self._load_all_cols = load_all_columns
+        if self._load_all_cols:
+            self.df = self.spark.read.option("mergeSchema", "true").parquet(source)
+        else:
+            self.df = self.spark.read.option("mergeSchema", "true").parquet(source).select(*self._cols)
+            
+        print(" ... finished reading table ... table schema:")
         self.df.printSchema()
+        self._nsample_per_attempt = 10
         
         # Load the parquet table
         #print("columns: ",self.df.column_names)
         #print("nrows: ",self.df.num_rows)
         self.nentries = self.df.count()
+        print(" ... number of entries: ",self.nentries)
 
-        # self.random_access = random_access
+        self._verbose = verbose
+
+
+
+        #self.random_access = random_access
         # self.partition_index = 0
         # self.num_partitions = 1
         # self.start_index = 0
@@ -54,139 +75,74 @@ class larmatchDataset(torch.utils.data.Dataset):
         #     self.voxelizer.set_voxel_size_cm( self._voxelsize_cm )
         
 
-    def get_entry(self,ientry):
-        if ientry<0 or ientry>=self.nentries:
-            print("Entry out of range. Table contains %d entries."%(self.nentries))
-            return {}
-
-        #print("ENTRY: ",ientry)
-        entry_data = {}
-        for k in self.table.column_names:
-            if "_shape" in k:
-                continue
-            #print("unpack: ",k)
-            shape_name = k+"_shape"
-            if shape_name in self.table.column_names:
-                s = self.table[shape_name][ientry].as_py()
-                shape = np.array( s, dtype=np.int )
-                d = self.table[k][ientry].as_py()
-                arr = np.array( d ).reshape( shape )
-                entry_data[k] = arr
-            else:
-                entry_data[k] = self.table[k][ientry]
-        return entry_data
-        
-
-
     def __getitem__(self, idx):
         worker_info = torch.utils.data.get_worker_info()
 
-        if self._random_access and self._current_entry>=self.nentries:
-            # reset random choice
-            print("reset choices")
-            self._random_entry_list = self._rng.choice( self.nentries, size=self.nentries )
-            self._current_entry = 0
+        # get the entry from the parquet file
+        s = time.time()
+        count = 0
+        while (count<1):
+            sampled_rows = self.df.sample(False, float(self._nsample_per_attempt)/float(self.nentries)).limit(1)
+            if not self._load_all_cols:
+                sample = sampled_rows.collect()
+            else:
+                sample = sampled_rows.select(*self._cols).collect()
+            count = len(sample)
+            if count<1:
+                print("WTF")
+                
+        dtsample = time.time()-s
+        if self._verbose:            
+            print("time to sample: ",dtsample)
 
-        ientry = int(self._current_entry)+0
+        data = self.get_data_dict_from_ubparquet_file( sample )
+    
+        # xlist = np.unique( data["voxcoord"], axis=0, return_counts=True )
+        # indexlist = xlist[0]
+        # counts = xlist[-1]
+        # hasdupe = False
+        # for i in range(indexlist.shape[0]):
+        #     if counts[i]>1:
+        #         print(i," ",indexlist[i,:]," counts=",counts[i])
+        #         hasdupe = True
+        # if hasdupe:
+        #     raise("[larvoxel_dataset::__getitem__] Dupe introduced somehow in batch-index=%d"%(ibatch)," arr=",data["voxcoord"].shape)
+
+        # self._nloaded += 1
+        # self._current_entry += 1            
         
-        if self._random_access:
-            data    = {"entry":ientry,
-                       "tree_entry":self._random_entry_list[ientry]}
-        else:            
-            data    = {"entry":ientry,
-                       "tree_entry":int(ientry)%int(self.nentries)}
+        # return copy.deepcopy(data)
+        return data        
 
-        if not self.is_voxeldata:
-            data = self.get_data_dict_from_triplet_file( data )
-        else:
-            data = self.get_data_dict_from_voxelarray_file( data )
+    def get_data_dict_from_ubparquet_file(self, df):
+        """
+        retrieve data from 
+        """
+        #print(df)
 
-        xlist = np.unique( data["voxcoord"], axis=0, return_counts=True )
-        indexlist = xlist[0]
-        counts = xlist[-1]
-        hasdupe = False
-        for i in range(indexlist.shape[0]):
-            if counts[i]>1:
-                print(i," ",indexlist[i,:]," counts=",counts[i])
-                hasdupe = True
-        if hasdupe:
-            raise("[larvoxel_dataset::__getitem__] Dupe introduced somehow in batch-index=%d"%(ibatch)," arr=",data["voxcoord"].shape)
-
-        self._nloaded += 1
-        self._current_entry += 1            
+        # SLOW ASF
+        #tpdf = time.time()
+        #pdf = df.toPandas()
+        #print(pdf)
+        #print("time to pandas: ",time.time()-tpdf)
         
-        return copy.deepcopy(data)
+        tstart = time.time()
 
-    def get_data_dict_from_triplet_file(self, data):    
+        #dfcol = df.select(*self._cols).collect()[0]
+        dfcol = df[0]
 
-        # get data from match trees            
-        nbytes = self.loader.load_entry(data["tree_entry"])
-        if self._verbose:
-            print("nbytes: ",nbytes," for tree[",name,"] entry=",data['tree_entry'])
+        data = {"run":    dfcol['run'],
+                "subrun": dfcol['subrun'],
+                "event":  dfcol['event'] }
 
-        if self._verbose:
-            dtio = time.time()-tio
-
-        if not self._voxelize:
-            # get the spacepoints            
-            matchdata   = self.loader.triplet_v[0].make_spacepoint_charge_array()
-        else:
-            # voxelize the data
-            self.voxelizer.make_voxeldata( self.loader.triplet_v[0] )
-            voxdata = self.voxelizer.get_full_voxel_labelset_dict( self.loader )
-            origin_x = self.voxelizer.get_origin()[0]
-            origin_y = self.voxelizer.get_origin()[1]
-            origin_z = self.voxelizer.get_origin()[2]
-            pos = np.zeros( (voxdata["voxcoord"].shape[0], 6 ), dtype=np.float32 )
-            pos[:,0:3] = voxdata["voxcoord"]
-            pos[:,0] += origin_x/self._voxelsize_cm
-            pos[:,1] += origin_x/self._voxelsize_cm 
-            pos[:,2] += origin_x/self._voxelsize_cm
-            pos *= self._voxelsize_cm
-            
-            pos[:,3:] = np.clip( voxdata["voxfeat"]/40.0, 0, 10.0 )
-
-            matchdata = {"spacepoint_t":pos,
-                         "truetriplet_t":voxdata["voxlabel"]}
-            data.update(voxdata)
-        
-        # add the contents to the data dictionary
-        data.update(matchdata)
-
-            
-        if self._verbose:
-            tottime = time.time()-t_start            
-            print("[larennetDataset entry=%d loaded]"%(data["tree_entry"]))
-            print("  io time: %.3f secs"%(dtio))
-            print("  tot time: %.3f secs"%(tottime))
-            
-        return data
-
-    def get_data_dict_from_voxelarray_file(self, data):
-        
-        # get data from match trees            
-        nbytes = self.voxeldata_tree.GetEntry(data["tree_entry"])
-        if self._verbose:
-            print("nbytes: ",nbytes," for tree[",name,"] entry=",data['tree_entry'])
+        for col in ["wireimg_coord0","wireimg_coord1","wireimg_coord2"]:
+            shape = np.array(dfcol[col+"_shape"])
+            data[col] = np.array( dfcol[col] ).reshape(shape)
 
         if self._verbose:
-            dtio = time.time()-tio
-
-        #print("get_data_dict_from_voxelarray_file: ",self.voxeldata_tree.coord_v.at(0).tonumpy().shape)
-        data["voxcoord"] = self.voxeldata_tree.coord_v.at(0).tonumpy()
-        data["voxfeat"]  = self.voxeldata_tree.feat_v.at(0).tonumpy()
-        data["ssnet_labels"] =  self.voxeldata_tree.ssnet_truth_v.at(0).tonumpy().astype(np.int)
-        data["kplabel"] =  self.voxeldata_tree.kp_truth_v.at(0).tonumpy()
-        data["voxlabel"] = self.voxeldata_tree.larmatch_truth_v.at(0).tonumpy()
-        data["voxlmweight"] = self.voxeldata_tree.larmatch_weight_v.at(0).tonumpy()
-        data["kpweight"]    = self.voxeldata_tree.kp_weight_v.at(0).tonumpy()
-        data["ssnet_weights"] = self.voxeldata_tree.ssnet_weight_v.at(0).tonumpy()
-
-        if self._verbose:
-            tottime = time.time()-t_start            
-            print("[larvoxelDataset::get_data_dict_from_voxelarray_file entry=%d loaded]"%(data["tree_entry"]))
-            print("  io time: %.3f secs"%(dtio))
-            print("  tot time: %.3f secs"%(tottime))
+             tottime = time.time()-tstart
+             print("[larmatchDataset::get_data_dict_from_ubparquet_file]")
+             print("  time from pyspark dataframe to numpy arrays: %.3f secs"%(tottime))
             
         return data
     
@@ -208,83 +164,7 @@ class larmatchDataset(torch.utils.data.Dataset):
         """
         npoints = 0
         batch_size = len(batch)
-        tree_entries = [ x["tree_entry"] for x in batch ]
-        npoints_v = []
-        #print("[larvoxelDataset::collate_fn] batch len=%d tree entries="%(batch_size),tree_entries)
-        
-        for ib,data in enumerate(batch):
-            #print("batch[%d]: "%(ib),data["voxcoord"].shape)
-            npoints += data["voxcoord"].shape[0]
-            npoints_v.append( data["voxcoord"].shape[0] )
-        #print("[larvoxelDataset::collate_fn] batch: ",type(batch)," len=",len(batch)," nvoxels=",npoints)
-
-        # check for duplicates in individual entries in batch
-        for ib,data in enumerate(batch):
-            xlist = np.unique( data["voxcoord"], axis=0, return_counts=True )
-            indexlist = xlist[0]
-            counts = xlist[-1]
-            hasdupe = False
-            for i in range(indexlist.shape[0]):
-                if counts[i]>1:
-                    print(i," ",indexlist[i,:]," counts=",counts[i])
-                    hasdupe = True
-            if hasdupe:
-                raise("Dupe introduced somehow in batch-index=%d"%(ib)," arr=",data["voxcoord"].shape)
-        
-
-        v = ["tree_entry","voxcoord","voxfeat","voxlabel","ssnet_labels","kplabel","voxlmweight","ssnet_weights","kpweight"]
-
-        #print("batch_size: ",batch_size)
-        #for ib in range(batch_size):
-        #    print("batch ",ib," --------------------")
-        #    for vv in v[1:]:
-        #        print("  ",vv,": ",batch[ib][vv].shape)
-        
-        batch_dict = {"tree_entry":tree_entries,
-                      "voxcoord":[],
-                      "voxfeat":[]}
-        for k in batch[0].keys():
-            #print(k,": ",type(batch[0][k]))            
-            if type(batch[0][k]) is not np.ndarray:
-                continue
-            arr = batch[0][k]            
-            if k in ["spacepoint_t","truetriplet_t"]:
-                continue
-            elif k=="voxcoord":
-                batch_dict[k] = np.zeros( (npoints,arr.shape[1]+1), dtype=arr.dtype )
-                #batch_dict["voxcoord"].append( arr )
-            elif k=="voxfeat":
-                batch_dict[k] = np.zeros( (npoints,arr.shape[1]), dtype=arr.dtype )
-                #batch_dict["voxfeat"].append( arr )                
-            elif len(arr.shape)>1:
-                batch_dict[k] = np.zeros( (1,arr.shape[0],npoints), dtype=arr.dtype )
-            else:
-                batch_dict[k] = np.zeros( (1,npoints), dtype=arr.dtype )
-            #print(k," array=",arr.shape," batch array: ",batch_dict[k].shape)
-        #coords, feats = ME.utils.sparse_collate(batch_dict["voxcoord"], batch_dict["voxfeat"])
-
-        npoints = 0        
-        for ib,data in enumerate(batch):
-
-            n = data["voxcoord"].shape[0]
-            batch_dict["voxcoord"][npoints:npoints+n,0]  = ib
-            batch_dict["voxcoord"][npoints:npoints+n,1:] = data["voxcoord"]
-            batch_dict["voxfeat"][npoints:npoints+n,:] = data["voxfeat"]
-            
-            for k in v[3:]:
-                arr = data[k]
-                if len(arr.shape)>1:
-                    batch_dict[k][0,:,npoints:npoints+n] = arr
-                else:
-                    batch_dict[k][0,npoints:npoints+n] = arr
-                    
-            npoints += n
-
-        #coords = batch_dict["voxcoord"]
-        #feats  = batch_dict["voxfeat"]
-        #A = ME.SparseTensor(features=torch.from_numpy(feats), coordinates=torch.from_numpy(coords))
-        #print("sparsetensor: ",A)            
-        #batch_dict["sparsetensor"] = A
+        batch_dict = {}
 
         return batch_dict
     
@@ -294,15 +174,15 @@ if __name__ == "__main__":
     import time
     import MinkowskiEngine as ME
 
-    niter = 100
-    batch_size = 4
+    niter = 20
+    batch_size = 1
     #test = larmatchDataset( filefolder="./temp.parquet", random_access=True )
     #test = larmatchDataset( source="./temp.parquet", random_access=True )
-    test = larmatchDataset( source="./data/*/*.parquet", random_access=True )
+    test = larmatchDataset( source="./data/*/*.parquet", verbose=True )
     nrows = len(test)
     print("num rows: ",nrows)
 
-    #loader = torch.utils.data.DataLoader(test,batch_size=batch_size,collate_fn=larvoxelDataset.collate_fn)
+    loader = torch.utils.data.DataLoader(test,batch_size=batch_size)
 
     start = time.time()
     for iiter in range(niter):
@@ -310,11 +190,14 @@ if __name__ == "__main__":
         print("====================================")
         #for ib,data in enumerate(batch):
         print("ITER[%d]"%(iiter))
-        sample = test.df.sample(False, float(batch_size*2.0)/float(nrows)).limit(batch_size)
-        print("sample ncounts: ",sample.count())        
+        #sample = test.df.sample(False, ).limit(batch_size)
+        #sample = test.df.sample(False,float(batch_size*2.0)/float(nrows)).limit(batch_size)        
+        #print("sample ncounts: ",sample.count())        
         
-    #     batch = next(iter(loader))
+        batch = next(iter(loader))
+        #print("batch ncounts: ",batch.count())
 
+    
     #     print("batch keys: ",batch.keys())
     #     print(batch["tree_entry"])
         
