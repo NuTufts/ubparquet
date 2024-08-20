@@ -2,6 +2,7 @@ import os,sys
 from ctypes import c_int
 import pyarrow as pa
 import pyarrow.parquet
+import pandas
 import numpy as np
 import ROOT as rt
 from larcv import larcv
@@ -100,7 +101,8 @@ print(entry_dict["subrun"])
 print(entry_dict["event"])
 print("write table")
 pa_table = pa.table( entry_dict )
-pyarrow.parquet.write_table(pa_table, "temp.parquet",compression="GZIP")
+#pyarrow.parquet.write_table(pa_table, "temp.parquet",compression="GZIP")
+pyarrow.parquet.write_table(pa_table, "temp.parquet")
 
     
 

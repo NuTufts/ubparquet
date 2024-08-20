@@ -2,15 +2,61 @@ import os,time
 import copy
 import pyspark
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import monotonically_increasing_id 
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
 
 class larmatchDataset(torch.utils.data.Dataset):
-    def __init__(self, source=None, verbose=False, load_all_columns=False ):
+    def __init__(self, source=None, verbose=False, load_all_columns=True ):
         """
         Parameters:
+
+        EXPECTED SCHEMA OF UBPARQUTE FILES
+ |-- matchtriplet: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- matchtriplet_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- ssnet_label: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- ssnet_label_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- kplabel: array (nullable = true)
+ |    |-- element: float (containsNull = true)
+ |-- kplabel_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- spacepoint_t: array (nullable = true)
+ |    |-- element: float (containsNull = true)
+ |-- spacepoint_t_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_feat0: array (nullable = true)
+ |    |-- element: float (containsNull = true)
+ |-- wireimg_feat0_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_coord0: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_coord0_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_feat1: array (nullable = true)
+ |    |-- element: float (containsNull = true)
+ |-- wireimg_feat1_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_coord1: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_coord1_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_feat2: array (nullable = true)
+ |    |-- element: float (containsNull = true)
+ |-- wireimg_feat2_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_coord2: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- wireimg_coord2_shape: array (nullable = true)
+ |    |-- element: long (containsNull = true)
+ |-- run: long (nullable = true)
+ |-- subrun: long (nullable = true)
+ |-- event: long (nullable = true)
         """
 
         self._cols = ['wireimg_coord0',
@@ -25,20 +71,32 @@ class larmatchDataset(torch.utils.data.Dataset):
                       'wireimg_coord2_shape',
                       'wireimg_feat2',
                       'wireimg_feat2_shape',
+                      'matchtriplet',
+                      'matchtriplet_shape',
+                      'ssnet_label',
+                      'ssnet_label_shape',
+                      'kplabel',
+                      'kplabel_shape',
                       'run','subrun','event']
 
         self.spark = SparkSession \
             .builder \
+            .master('local') \
+            .config("spark.driver.memory", "15g") \
             .appName("larmatchDataset") \
+            .config('spark.executor.memory', '15gb') \
+            .config("spark.cores.max", "6") \
             .getOrCreate()        
         
         print("larmatchDataset: loading dataset...")
         self._load_all_cols = load_all_columns
-        if self._load_all_cols:
-            self.df = self.spark.read.option("mergeSchema", "true").parquet(source)
+        self.df = self.spark.read.option("mergeSchema", "true").parquet(source)
+
+        if not self._load_all_cols:
+            self.df = self.df.select(*self._cols)
         else:
-            self.df = self.spark.read.option("mergeSchema", "true").parquet(source).select(*self._cols)
-            
+            self.df = self.df.select("*")
+
         print(" ... finished reading table ... table schema:")
         self.df.printSchema()
         self._nsample_per_attempt = 10
@@ -50,7 +108,6 @@ class larmatchDataset(torch.utils.data.Dataset):
         print(" ... number of entries: ",self.nentries)
 
         self._verbose = verbose
-
 
 
         #self.random_access = random_access
@@ -73,7 +130,16 @@ class larmatchDataset(torch.utils.data.Dataset):
         # if self._voxelize and not self.is_voxeldata:
         #     self.voxelizer = larflow.voxelizer.VoxelizeTriplets()
         #     self.voxelizer.set_voxel_size_cm( self._voxelsize_cm )
-        
+
+    def dump_rse(self):
+        self.df.select("run","subrun","event").show()
+
+    def get_entry(self,run,subrun,event):
+        sampled_rows = self.df.filter( "run==%d and subrun==%d and event==%d"%(run,subrun,event) ).rdd.collect()
+        if len(sampled_rows)>0:
+            return self.get_data_dict_from_ubparquet_file( sampled_rows )
+        else:
+            return {}
 
     def __getitem__(self, idx):
         worker_info = torch.utils.data.get_worker_info()
@@ -83,11 +149,8 @@ class larmatchDataset(torch.utils.data.Dataset):
         count = 0
         while (count<1):
             sampled_rows = self.df.sample(False, float(self._nsample_per_attempt)/float(self.nentries)).limit(1)
-            if not self._load_all_cols:
-                sample = sampled_rows.collect()
-            else:
-                sample = sampled_rows.select(*self._cols).collect()
-            count = len(sample)
+            count = sampled_rows.count()
+            print("counts returned: ",count)
             if count<1:
                 print("WTF")
                 
@@ -95,6 +158,8 @@ class larmatchDataset(torch.utils.data.Dataset):
         if self._verbose:            
             print("time to sample: ",dtsample)
 
+        #sample = sampled_rows.select(*self._cols).collect()
+        sample = sampled_rows.rdd.collect()
         data = self.get_data_dict_from_ubparquet_file( sample )
     
         # xlist = np.unique( data["voxcoord"], axis=0, return_counts=True )
@@ -135,7 +200,7 @@ class larmatchDataset(torch.utils.data.Dataset):
                 "subrun": dfcol['subrun'],
                 "event":  dfcol['event'] }
 
-        for col in ["wireimg_coord0","wireimg_coord1","wireimg_coord2"]:
+        for col in ["wireimg_coord0","wireimg_coord1","wireimg_coord2","wireimg_feat0","wireimg_feat1","wireimg_feat2"]:
             shape = np.array(dfcol[col+"_shape"])
             data[col] = np.array( dfcol[col] ).reshape(shape)
 
@@ -171,18 +236,20 @@ class larmatchDataset(torch.utils.data.Dataset):
             
 if __name__ == "__main__":
 
-    import time
+    import time,sys
     import MinkowskiEngine as ME
 
-    niter = 20
+    niter = 10
     batch_size = 1
     #test = larmatchDataset( filefolder="./temp.parquet", random_access=True )
     #test = larmatchDataset( source="./temp.parquet", random_access=True )
-    test = larmatchDataset( source="./data/*/*.parquet", verbose=True )
+    test = larmatchDataset( source="./data/*/*.parquet", verbose=True, load_all_columns=False )
     nrows = len(test)
     print("num rows: ",nrows)
 
     loader = torch.utils.data.DataLoader(test,batch_size=batch_size)
+    
+    #test.dump_rse()
 
     start = time.time()
     for iiter in range(niter):
@@ -190,10 +257,6 @@ if __name__ == "__main__":
         print("====================================")
         #for ib,data in enumerate(batch):
         print("ITER[%d]"%(iiter))
-        #sample = test.df.sample(False, ).limit(batch_size)
-        #sample = test.df.sample(False,float(batch_size*2.0)/float(nrows)).limit(batch_size)        
-        #print("sample ncounts: ",sample.count())        
-        
         batch = next(iter(loader))
         #print("batch ncounts: ",batch.count())
 

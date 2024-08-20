@@ -12,6 +12,11 @@ These are parquet files that store 2D numpy arrays.
 ## The Schema
 
 
+## Reading the files
+
+We provide an example pytorch DataSet for reading in the data.
+Relies on pyspark.
+
 ## To run
 
 * You need to build and setup the `ubdl` repository to be able to use these files. *
